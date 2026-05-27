@@ -1,0 +1,20 @@
+policies:
+  mock-service:
+    target: http://mock-service:3000
+    retry:
+      attempts: 3
+      backoff: exponential
+      jitter: true
+      delay: 500ms
+      retryOn:
+        - 500
+        - 503
+        - 429
+    circuit_breaker:
+      threshold: 50
+      window: 60s
+      cooldown: 30s
+    rate_limit:
+      requests: 100
+      window: 1s
+    timeout: 5s

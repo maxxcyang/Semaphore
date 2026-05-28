@@ -30,7 +30,8 @@ export async function handleProxyRequest(
   path: string,
   headers: Record<string, string>,
   body: Buffer | null,
-  config: ParsedConfig
+  config: ParsedConfig,
+  callerIp?: string
 ): Promise<{ statusCode: number; headers: Record<string, string>; body: Buffer | string }> {
   // 1. Look up policy
   const policy = config.policies[serviceName]
@@ -44,7 +45,7 @@ export async function handleProxyRequest(
 
   // 2. Rate limit check
   if (policy.rate_limit) {
-    const allowed = checkRateLimit(serviceName, policy.rate_limit)
+    const allowed = checkRateLimit(serviceName, policy.rate_limit, callerIp)
     if (!allowed) {
       return {
         statusCode: 429,
@@ -57,7 +58,7 @@ export async function handleProxyRequest(
   // 3. Circuit breaker check
   let circuitResult = { allowed: true, isTestRequest: false }
   if (policy.circuit_breaker) {
-    circuitResult = checkCircuit(serviceName, policy.circuit_breaker)
+    circuitResult = await checkCircuit(serviceName, policy.circuit_breaker)
     if (!circuitResult.allowed) {
       return {
         statusCode: 503,
@@ -80,13 +81,14 @@ export async function handleProxyRequest(
     forwardHeaders,
     body,
     policy.retry,
-    policy.timeoutMs
+    policy.timeoutMs,
+    policy.failureOn
   )
 
   // 7. Record circuit outcome
   if (policy.circuit_breaker) {
     const failed = outcome.allAttemptsFailed || outcome.timedOut
-    recordCircuitOutcome(serviceName, policy.circuit_breaker, failed, circuitResult.isTestRequest)
+    await recordCircuitOutcome(serviceName, policy.circuit_breaker, failed, circuitResult.isTestRequest)
   }
 
   // 8. Return response

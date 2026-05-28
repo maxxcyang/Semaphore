@@ -1,15 +1,25 @@
+global:
+  max_body_size: 10mb
+
 policies:
   mock-service:
     target: http://mock-service:3000
+    failure_on:
+      - 500
+      - 502
+      - 503
+      - 504
     retry:
       attempts: 3
       backoff: exponential
       jitter: true
       delay: 500ms
+      budget: 10s
       retryOn:
         - 500
         - 503
         - 429
+      retryOnTimeout: false
     circuit_breaker:
       threshold: 50
       window: 60s
@@ -17,4 +27,7 @@ policies:
     rate_limit:
       requests: 100
       window: 1s
+      per_caller:
+        requests: 20
+        window: 1s
     timeout: 5s

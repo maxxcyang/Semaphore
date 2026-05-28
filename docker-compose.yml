@@ -11,13 +11,20 @@ services:
     environment:
       - NODE_ENV=production
       - CONFIG_PATH=/config/resilience.yaml
+      - REDIS_URL=redis://redis:6379
     depends_on:
       - mock-service
+      - redis
 
   mock-service:
     build: ./mock-service
     ports:
       - "3001:3000"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
 
 volumes:
   semaphore-data:

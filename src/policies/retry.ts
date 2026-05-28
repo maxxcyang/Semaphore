@@ -27,18 +27,38 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function sleepUntilBudget(ms: number, budgetDeadline: number | undefined): Promise<void> {
+  const clamped = budgetDeadline !== undefined
+    ? Math.min(ms, Math.max(0, budgetDeadline - Date.now()))
+    : ms
+  return sleep(clamped)
+}
+
 export async function executeWithRetry(
   targetUrl: string,
   method: string,
   headers: Record<string, string>,
   body: Buffer | null,
   retryConfig: RetryConfig | undefined,
-  timeoutMs: number | undefined
+  timeoutMs: number | undefined,
+  failureOn?: number[]
 ): Promise<RetryOutcome> {
   const maxAttempts = retryConfig?.attempts ?? 1
   const retryOn: number[] = retryConfig?.retryOn ?? []
+  const retryOnTimeout = retryConfig?.retryOnTimeout ?? true
+  const budgetDeadline = retryConfig?.budgetMs !== undefined
+    ? Date.now() + retryConfig.budgetMs
+    : undefined
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (budgetDeadline !== undefined && Date.now() >= budgetDeadline) {
+      return {
+        response: syntheticTimeoutResponse(),
+        allAttemptsFailed: true,
+        timedOut: true,
+      }
+    }
+
     const isLastAttempt = attempt === maxAttempts - 1
 
     // Set up per-attempt abort controller for timeout
@@ -58,17 +78,19 @@ export async function executeWithRetry(
 
       clearTimeout(timeoutHandle)
 
-      const is5xx = response.status >= 500 && response.status < 600
+      const isFailed = failureOn && failureOn.length > 0
+        ? failureOn.includes(response.status)
+        : response.status >= 500 && response.status < 600
       const shouldRetry = retryOn.includes(response.status) && !isLastAttempt
 
       if (shouldRetry) {
-        await sleep(computeDelay(retryConfig!, attempt))
+        await sleepUntilBudget(computeDelay(retryConfig!, attempt), budgetDeadline)
         continue
       }
 
       return {
         response,
-        allAttemptsFailed: is5xx,
+        allAttemptsFailed: isFailed,
         timedOut: false,
       }
     } catch (err: unknown) {
@@ -79,8 +101,8 @@ export async function executeWithRetry(
         (err.name === 'AbortError' || err.name === 'TimeoutError')
 
       if (isAbort) {
-        if (!isLastAttempt) {
-          await sleep(computeDelay(retryConfig!, attempt))
+        if (!isLastAttempt && retryOnTimeout) {
+          await sleepUntilBudget(computeDelay(retryConfig!, attempt), budgetDeadline)
           continue
         }
         return {
@@ -92,7 +114,7 @@ export async function executeWithRetry(
 
       // Non-abort network error — treat as fatal on this attempt
       if (!isLastAttempt) {
-        await sleep(computeDelay(retryConfig!, attempt))
+        await sleepUntilBudget(computeDelay(retryConfig!, attempt), budgetDeadline)
         continue
       }
       throw err

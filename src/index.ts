@@ -2,11 +2,17 @@ import Fastify from 'fastify'
 import { loadConfig } from './config/loader'
 import { initDb, writePolicy } from './state/db'
 import { initMemory } from './state/memory'
+import { initRedis } from './state/redis'
 import { proxyRoutes } from './routes/proxy'
 import { healthRoutes } from './routes/health'
 
 async function start(): Promise<void> {
   const config = await loadConfig()
+
+  const redisUrl = process.env.REDIS_URL
+  if (redisUrl) {
+    initRedis(redisUrl)
+  }
 
   initDb()
   for (const [name, policy] of Object.entries(config.policies)) {
@@ -14,7 +20,20 @@ async function start(): Promise<void> {
   }
   initMemory(config)
 
-  const app = Fastify({ logger: true })
+  const app = Fastify({
+    logger: true,
+    ...(config.global?.maxBodySizeBytes !== undefined && { bodyLimit: config.global.maxBodySizeBytes }),
+  })
+
+  app.setErrorHandler((error, _request, reply) => {
+    if (error.statusCode === 413) {
+      void reply.status(413).header('content-type', 'application/json').send(
+        JSON.stringify({ error: 'request_too_large' })
+      )
+      return
+    }
+    void reply.status(error.statusCode ?? 500).send(error)
+  })
 
   // Parse all request bodies as Buffer (needed for replay on retries)
   app.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, body, done) => {

@@ -27,7 +27,8 @@ export async function proxyRoutes(
       path,
       headers,
       body,
-      options.config
+      options.config,
+      request.ip
     )
 
     reply.status(result.statusCode)

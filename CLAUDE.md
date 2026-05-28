@@ -2,7 +2,7 @@
 
 ## What this project is
 
-Semaphore is a resilience sidecar proxy written in TypeScript (Node.js + Fastify). It intercepts HTTP requests and applies retry, circuit breaking, rate limiting, and timeout policies configured in `resilience.yaml`. It has no external service dependencies — SQLite is the only persistence layer.
+Semaphore is a resilience sidecar proxy written in TypeScript (Node.js + Fastify). It intercepts HTTP requests and applies retry, circuit breaking, rate limiting, and timeout policies configured in `resilience.yaml`. SQLite is the primary persistence layer; Redis is an optional dependency for sharing circuit breaker state across sidecar instances.
 
 ## Key commands
 
@@ -34,6 +34,7 @@ src/
     health.ts               # Fastify route: GET /health
   state/
     memory.ts               # in-memory store keyed by service name (hot path)
+    redis.ts                # optional Redis client; shared circuit breaker state when REDIS_URL is set
     db.ts                   # SQLite: policies table + circuit_breaker_log audit table
 
 tests/
@@ -58,11 +59,12 @@ mock-service/
 
 **State split:**
 - `src/state/memory.ts` — fast in-memory structures for circuit state and sliding windows (hot path)
+- `src/state/redis.ts` — optional Redis layer; when `REDIS_URL` is set, circuit breaker state is shared across all sidecar instances. Rate limit windows always remain local.
 - `src/state/db.ts` — SQLite for durable config records and circuit breaker state change audit log
 
-**Failure definition:** 5xx responses and timeouts only. 4xx is not a failure. The failure counter is incremented once per logical call — only after all retry attempts for that call are exhausted. Individual retry attempts within a single call do not each increment the counter.
+**Failure definition:** By default, any 5xx response or timeout counts as a failure. Override per service with `failure_on: [500, 502, 503, 504]`. 4xx is never a failure. The failure counter is incremented once per logical call — only after all retry attempts for that call are exhausted.
 
-**Half-open state:** Uses a `testInFlight` flag — only one probe request gets through; concurrent requests during half-open are rejected with `503`.
+**Half-open state:** Uses a `testInFlight` flag — only one probe request gets through; concurrent requests during half-open are rejected with `503`. In Redis mode, `testInFlight` uses `SET NX` with a TTL so only one instance probes at a time.
 
 **Sidecar error responses:** When the sidecar itself rejects a request (not the upstream), it returns structured JSON so callers can distinguish sidecar rejections from real downstream errors:
 ```json
@@ -72,7 +74,7 @@ mock-service/
 
 **Retry jitter formula:** `wait = random(0, 2^attempt * baseDelayMs)`
 
-**Body buffering:** The full request body is buffered in memory before the first attempt to enable replay on retries. No size limit in V1 (configurable cap is V2).
+**Body buffering:** The full request body is buffered in memory before the first attempt to enable replay on retries. The global `max_body_size` cap (e.g. `10mb`) is enforced by Fastify's `bodyLimit`; requests exceeding it are rejected with `413` before reaching the proxy handler.
 
 **Startup behavior:** On every startup, `resilience.yaml` is loaded into SQLite and overwrites any existing policy config. YAML always wins. If config is missing, has a syntax error, or fails Zod validation, the process exits immediately — no stale config.
 
@@ -91,6 +93,7 @@ All policy blocks (`retry`, `circuit_breaker`, `rate_limit`, `timeout`) are opti
 | `PORT` | `4000` | Fastify listen port |
 | `CONFIG_PATH` | `/config/resilience.yaml` | YAML config location |
 | `DB_PATH` | `/data/semaphore.db` | SQLite database path |
+| `REDIS_URL` | — | Optional. When set, circuit breaker state is shared via Redis (e.g. `redis://localhost:6379`) |
 | `NODE_ENV` | — | Set to `production` in docker-compose |
 
 ## Testing
@@ -105,28 +108,10 @@ Multi-stage Dockerfile: builder compiles TypeScript, runtime stage uses Node 22 
 
 ## Roadmap
 
-### V2
-| Feature | Notes |
-|---------|-------|
-| Shared circuit breaker state across instances | Via Redis; V1 state is per-sidecar in-memory only |
-| Hot config reload | V1 requires restart |
-| Per-caller (IP-based) rate limiting | V1 rate limit is global per service |
-| Total timeout budget across retry attempts | V1 timeout is per-attempt only |
-| Configurable `failureOn` codes | V1 hardcodes any 5xx as failure |
-| Configurable request body buffer size cap | V1 buffers full body with no limit |
-| Configurable timeout retry behavior | V1 always retries on timeout |
-| Per-endpoint circuit breakers | V1 is per-service only |
-| Bulkhead / concurrency limiting | — |
-
 ### V3
 | Feature | Notes |
 |---------|-------|
 | Metrics export | Prometheus |
 | Distributed tracing | OpenTelemetry |
-| Full request logging | V1 logs circuit breaker state changes only |
-| gRPC support | V1 is HTTP only |
-
-### Never (out of scope)
-- Service discovery or load balancing
-- mTLS or authentication
-- Observability dashboard / UI
+| Full request logging | V2 logs circuit breaker state changes only |
+| gRPC support | V2 is HTTP only |

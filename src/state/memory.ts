@@ -12,6 +12,7 @@ export interface ServiceMemoryState {
   testInFlight: boolean
   requestWindow: RequestRecord[]
   rateLimitWindow: number[]
+  perCallerWindows: Map<string, number[]>
 }
 
 const store = new Map<string, ServiceMemoryState>()
@@ -25,6 +26,7 @@ export function initMemory(config: ParsedConfig): void {
       testInFlight: false,
       requestWindow: [],
       rateLimitWindow: [],
+      perCallerWindows: new Map(),
     })
   }
 }

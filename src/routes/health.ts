@@ -42,7 +42,7 @@ export async function healthRoutes(
         serviceInfo['opened_at'] = new Date(state.openedAt).toISOString()
       }
 
-      if (policy?.rate_limit) {
+      if (policy?.rate_limit?.requests !== undefined && policy.rate_limit.windowMs !== undefined) {
         serviceInfo['rate_limit'] = {
           current: state.rateLimitWindow.length,
           limit: policy.rate_limit.requests,

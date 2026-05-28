@@ -20,6 +20,14 @@ vi.mock('../src/state/db', () => ({
   appendCircuitLog: (...args: unknown[]) => mockAppendCircuitLog(...args),
 }))
 
+vi.mock('../src/state/redis', () => ({
+  hasRedis: () => false,
+  getSharedCircuitState: vi.fn(),
+  setSharedCircuitState: vi.fn(),
+  claimTestInFlight: vi.fn(),
+  clearTestInFlight: vi.fn(),
+}))
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -30,6 +38,7 @@ function makeState(overrides: Partial<ServiceMemoryState> = {}): ServiceMemorySt
     testInFlight: false,
     requestWindow: [],
     rateLimitWindow: [],
+    perCallerWindows: new Map(),
     ...overrides,
   }
 }
@@ -48,21 +57,21 @@ beforeEach(() => {
 // checkCircuit
 // ---------------------------------------------------------------------------
 describe('checkCircuit', () => {
-  it('returns allowed=true when circuit is closed', () => {
+  it('returns allowed=true when circuit is closed', async () => {
     mockGetState.mockReturnValue(makeState({ circuitState: 'closed' }))
-    const result = checkCircuit('svc', policy)
+    const result = await checkCircuit('svc', policy)
     expect(result).toEqual({ allowed: true, isTestRequest: false })
   })
 
-  it('returns allowed=false when circuit is open and cooldown not expired', () => {
+  it('returns allowed=false when circuit is open and cooldown not expired', async () => {
     mockGetState.mockReturnValue(
       makeState({ circuitState: 'open', openedAt: Date.now() - 100 })
     )
-    const result = checkCircuit('svc', policy) // cooldownMs=1000, only 100ms elapsed
+    const result = await checkCircuit('svc', policy) // cooldownMs=1000, only 100ms elapsed
     expect(result).toEqual({ allowed: false, isTestRequest: false })
   })
 
-  it('transitions to half-open after cooldown expires', () => {
+  it('transitions to half-open after cooldown expires', async () => {
     // After transition setState is called; subsequent getState should return half-open
     mockGetState
       .mockReturnValueOnce(
@@ -72,7 +81,7 @@ describe('checkCircuit', () => {
         makeState({ circuitState: 'half-open', testInFlight: false })
       )
 
-    const result = checkCircuit('svc', policy)
+    const result = await checkCircuit('svc', policy)
     // Should have transitioned to half-open and returned the probe request
     expect(mockSetState).toHaveBeenCalledWith('svc', {
       circuitState: 'half-open',
@@ -82,22 +91,22 @@ describe('checkCircuit', () => {
     expect(result.isTestRequest).toBe(true)
   })
 
-  it('in half-open: first checkCircuit returns isTestRequest=true', () => {
+  it('in half-open: first checkCircuit returns isTestRequest=true', async () => {
     mockGetState
       .mockReturnValueOnce(makeState({ circuitState: 'half-open', testInFlight: false }))
       .mockReturnValueOnce(makeState({ circuitState: 'half-open', testInFlight: false }))
 
-    const result = checkCircuit('svc', policy)
+    const result = await checkCircuit('svc', policy)
     expect(result).toEqual({ allowed: true, isTestRequest: true })
     expect(mockSetState).toHaveBeenCalledWith('svc', { testInFlight: true })
   })
 
-  it('in half-open: concurrent checkCircuit (testInFlight=true) returns allowed=false', () => {
+  it('in half-open: concurrent checkCircuit (testInFlight=true) returns allowed=false', async () => {
     mockGetState
       .mockReturnValueOnce(makeState({ circuitState: 'half-open', testInFlight: true }))
       .mockReturnValueOnce(makeState({ circuitState: 'half-open', testInFlight: true }))
 
-    const result = checkCircuit('svc', policy)
+    const result = await checkCircuit('svc', policy)
     expect(result).toEqual({ allowed: false, isTestRequest: false })
   })
 })
@@ -106,7 +115,7 @@ describe('checkCircuit', () => {
 // recordCircuitOutcome
 // ---------------------------------------------------------------------------
 describe('recordCircuitOutcome', () => {
-  it('after enough failures crosses threshold, circuit opens', () => {
+  it('after enough failures crosses threshold, circuit opens', async () => {
     // 2 prior failures, 2 totals => 100% failure rate, threshold=50
     const now = Date.now()
     mockGetState
@@ -130,7 +139,7 @@ describe('recordCircuitOutcome', () => {
         })
       )
 
-    recordCircuitOutcome('svc', policy, true, false)
+    await recordCircuitOutcome('svc', policy, true, false)
 
     const openCall = mockSetState.mock.calls.find(
       (c) => c[1].circuitState === 'open'
@@ -139,12 +148,12 @@ describe('recordCircuitOutcome', () => {
     expect(mockAppendCircuitLog).toHaveBeenCalledWith('svc', 'open')
   })
 
-  it('test success closes the circuit', () => {
+  it('test success closes the circuit', async () => {
     mockGetState.mockReturnValue(
       makeState({ circuitState: 'half-open', testInFlight: true })
     )
 
-    recordCircuitOutcome('svc', policy, false, true)
+    await recordCircuitOutcome('svc', policy, false, true)
 
     expect(mockSetState).toHaveBeenCalledWith('svc', {
       circuitState: 'closed',
@@ -154,12 +163,12 @@ describe('recordCircuitOutcome', () => {
     expect(mockAppendCircuitLog).toHaveBeenCalledWith('svc', 'closed')
   })
 
-  it('test failure reopens the circuit', () => {
+  it('test failure reopens the circuit', async () => {
     mockGetState.mockReturnValue(
       makeState({ circuitState: 'half-open', testInFlight: true, openedAt: Date.now() - 2000 })
     )
 
-    recordCircuitOutcome('svc', policy, true, true)
+    await recordCircuitOutcome('svc', policy, true, true)
 
     const reopenCall = mockSetState.mock.calls.find(
       (c) => c[1].circuitState === 'open'

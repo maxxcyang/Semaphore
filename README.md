@@ -38,16 +38,22 @@ curl http://localhost:4000/proxy/mock-service/hello
 Edit `resilience.yaml` and restart the sidecar. Config is validated on startup — the process exits immediately if the config is invalid.
 
 ```yaml
+global:
+  max_body_size: 10mb                  # max request body to buffer for retries (kb/mb/gb)
+
 policies:
   your-service-name:
     target: http://your-service:8080   # upstream URL
+    failure_on: [500, 502, 503, 504]   # which status codes count as failures (default: all 5xx)
 
     retry:
       attempts: 3                      # max total attempts (1 original + 2 retries)
       backoff: exponential             # "exponential" or "fixed"
       jitter: true                     # randomize delay to prevent thundering herd
       delay: 500ms                     # base delay (supports ms/s/m units)
+      budget: 10s                      # total time budget across all attempts
       retryOn: [500, 503, 429]         # which status codes trigger retry
+      retryOnTimeout: false            # whether a per-attempt timeout triggers retry
 
     circuit_breaker:
       threshold: 50                    # open if >50% of requests fail in window
@@ -55,15 +61,18 @@ policies:
       cooldown: 30s                    # how long to stay open before half-open test
 
     rate_limit:
-      requests: 100                    # max requests allowed in window
+      requests: 100                    # max requests allowed in window (global)
       window: 1s                       # sliding window duration
+      per_caller:
+        requests: 20                   # max requests per source IP in window
+        window: 1s
 
-    timeout: 5s                        # per-attempt timeout (5xx on expiry)
+    timeout: 5s                        # per-attempt timeout
 ```
 
-All time values support `ms`, `s`, and `m` suffixes. All policy blocks are optional — omit any you don't need.
+All time values support `ms`, `s`, and `m` suffixes. All policy blocks are optional — omit any you don't need. Within `rate_limit`, `requests`+`window` and `per_caller` are each optional but at least one must be present.
 
-**Failure definition:** 5xx responses and timeouts count as failures. 4xx responses are not failures (they indicate a caller error, not a service problem).
+**Failure definition:** By default, any 5xx response or timeout counts as a failure. Use `failure_on` to restrict which status codes trigger failure counting. 4xx is never a failure.
 
 ## API
 
@@ -101,6 +110,13 @@ sidecar:
   volumes:
     - ./resilience.yaml:/config/resilience.yaml
     - semaphore-data:/data
+  environment:
+    - REDIS_URL=redis://redis:6379   # optional; omit for single-instance deployments
+  depends_on:
+    - redis
+
+redis:
+  image: redis:7-alpine
 ```
 
 ## Environment variables
@@ -110,6 +126,7 @@ sidecar:
 | `PORT` | `4000` | Port the sidecar listens on |
 | `CONFIG_PATH` | `/config/resilience.yaml` | Path to config file |
 | `DB_PATH` | `/data/semaphore.db` | Path to SQLite database |
+| `REDIS_URL` | — | Optional. Enables shared circuit breaker state across instances (e.g. `redis://redis:6379`) |
 
 ## Development
 

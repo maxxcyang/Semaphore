@@ -1,6 +1,6 @@
 {
   "name": "semaphore",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "commonjs",
   "scripts": {
     "build": "tsc",
@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "fastify": "^4.26.2",
+    "ioredis": "^5.11.0",
     "js-yaml": "^4.1.0",
     "zod": "^3.22.4"
   },

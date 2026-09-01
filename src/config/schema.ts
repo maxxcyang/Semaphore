@@ -38,6 +38,13 @@ export interface ServicePolicy {
 
 export interface GlobalConfig {
   maxBodySizeBytes?: number
+  kafka?: KafkaConfig
+}
+
+export interface KafkaConfig {
+  brokers: string[]
+  clientId: string
+  topic: string
 }
 
 export interface ParsedConfig {
@@ -133,6 +140,11 @@ const servicePolicyRawSchema = z.object({
 
 const globalRawSchema = z.object({
   max_body_size: bytesStringSchema.optional(),
+  kafka: z.object({
+    brokers: z.array(z.string().min(1)).min(1),
+    client_id: z.string().min(1).default('semaphore'),
+    topic: z.string().min(1).default('semaphore.resilience-events'),
+  }).optional(),
 })
 
 const rawConfigSchema = z.object({
@@ -150,7 +162,16 @@ export function validateConfig(raw: unknown): ParsedConfig {
   const { global: rawGlobal, policies: rawPolicies } = result.data
 
   const global: GlobalConfig | undefined = rawGlobal
-    ? { maxBodySizeBytes: rawGlobal.max_body_size }
+    ? {
+        maxBodySizeBytes: rawGlobal.max_body_size,
+        ...(rawGlobal.kafka !== undefined && {
+          kafka: {
+            brokers: rawGlobal.kafka.brokers,
+            clientId: rawGlobal.kafka.client_id,
+            topic: rawGlobal.kafka.topic,
+          },
+        }),
+      }
     : undefined
 
   const policies: Record<string, ServicePolicy> = {}

@@ -41,6 +41,12 @@ Edit `resilience.yaml` and restart the sidecar. Config is validated on startup â
 global:
   max_body_size: 10mb                  # max request body to buffer for retries (kb/mb/gb)
 
+  # Optional: publish resilience events to Kafka. Omit to disable.
+  kafka:
+    brokers: [kafka:9092]
+    client_id: semaphore
+    topic: semaphore.resilience-events
+
 policies:
   your-service-name:
     target: http://your-service:8080   # upstream URL
@@ -71,6 +77,12 @@ policies:
 ```
 
 All time values support `ms`, `s`, and `m` suffixes. All policy blocks are optional â€” omit any you don't need. Within `rate_limit`, `requests`+`window` and `per_caller` are each optional but at least one must be present.
+
+### Kafka resilience events
+
+Kafka is optional. When `global.kafka` is configured, Semaphore publishes best-effort JSON events to the configured topic. It does not route requests through Kafka and it never waits for Kafka before returning an HTTP response. If Kafka is down, events are dropped while Semaphore reconnects in the background.
+
+Events include `request.completed`, `request.failed`, `retry.scheduled`, `rate_limit.rejected`, `circuit.rejected`, `circuit.opened`, and `circuit.closed`. Every event has `type`, `service`, and `timestamp`; request-related events include `requestId` when the caller provides an `X-Request-Id` header.
 
 **Failure definition:** By default, any 5xx response or timeout counts as a failure. Use `failure_on` to restrict which status codes trigger failure counting. 4xx is never a failure.
 
@@ -117,6 +129,9 @@ sidecar:
 
 redis:
   image: redis:7-alpine
+
+kafka:
+  image: confluentinc/cp-kafka:7.7.1
 ```
 
 ## Environment variables

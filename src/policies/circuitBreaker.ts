@@ -8,6 +8,7 @@ import {
   claimTestInFlight,
   clearTestInFlight,
 } from '../state/redis'
+import { publishResilienceEvent } from '../events/kafka'
 
 export interface CircuitCheckResult {
   allowed: boolean
@@ -92,6 +93,7 @@ export async function recordCircuitOutcome(
         setState(service, { circuitState: 'closed', openedAt: null, testInFlight: false })
       }
       appendCircuitLog(service, 'closed')
+      publishResilienceEvent({ type: 'circuit.closed', service })
     } else {
       if (redis) {
         await setSharedCircuitState(service, 'open', now)
@@ -100,6 +102,7 @@ export async function recordCircuitOutcome(
         setState(service, { circuitState: 'open', openedAt: now, testInFlight: false })
       }
       appendCircuitLog(service, 'open')
+      publishResilienceEvent({ type: 'circuit.opened', service, details: { reason: 'half_open_probe_failed' } })
     }
     return
   }
@@ -123,6 +126,11 @@ export async function recordCircuitOutcome(
         setState(service, { circuitState: 'open', openedAt: now })
       }
       appendCircuitLog(service, 'open')
+      publishResilienceEvent({
+        type: 'circuit.opened',
+        service,
+        details: { failureRate: (failures / total) * 100, failures, total },
+      })
     }
   }
 }

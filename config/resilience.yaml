@@ -1,5 +1,11 @@
 global:
   max_body_size: 10mb
+  # Optional resilience-event publishing. Remove this block to disable Kafka.
+  # kafka:
+  #   brokers:
+  #     - kafka:9092
+  #   client_id: semaphore
+  #   topic: semaphore.resilience-events
 
 policies:
   mock-service:

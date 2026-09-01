@@ -6,6 +6,13 @@ export interface RetryOutcome {
   timedOut: boolean
 }
 
+export interface RetryScheduledEvent {
+  attempt: number
+  nextAttempt: number
+  reason: 'status' | 'timeout' | 'network_error'
+  statusCode?: number
+}
+
 function syntheticTimeoutResponse(): Response {
   return new Response(JSON.stringify({ error: 'upstream_timeout' }), {
     status: 504,
@@ -41,7 +48,8 @@ export async function executeWithRetry(
   body: Buffer | null,
   retryConfig: RetryConfig | undefined,
   timeoutMs: number | undefined,
-  failureOn?: number[]
+  failureOn?: number[],
+  onRetry?: (event: RetryScheduledEvent) => void
 ): Promise<RetryOutcome> {
   const maxAttempts = retryConfig?.attempts ?? 1
   const retryOn: number[] = retryConfig?.retryOn ?? []
@@ -84,6 +92,7 @@ export async function executeWithRetry(
       const shouldRetry = retryOn.includes(response.status) && !isLastAttempt
 
       if (shouldRetry) {
+        onRetry?.({ attempt: attempt + 1, nextAttempt: attempt + 2, reason: 'status', statusCode: response.status })
         await sleepUntilBudget(computeDelay(retryConfig!, attempt), budgetDeadline)
         continue
       }
@@ -102,6 +111,7 @@ export async function executeWithRetry(
 
       if (isAbort) {
         if (!isLastAttempt && retryOnTimeout) {
+          onRetry?.({ attempt: attempt + 1, nextAttempt: attempt + 2, reason: 'timeout' })
           await sleepUntilBudget(computeDelay(retryConfig!, attempt), budgetDeadline)
           continue
         }
@@ -114,6 +124,7 @@ export async function executeWithRetry(
 
       // Non-abort network error — treat as fatal on this attempt
       if (!isLastAttempt) {
+        onRetry?.({ attempt: attempt + 1, nextAttempt: attempt + 2, reason: 'network_error' })
         await sleepUntilBudget(computeDelay(retryConfig!, attempt), budgetDeadline)
         continue
       }

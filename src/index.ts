@@ -5,6 +5,7 @@ import { initMemory } from './state/memory'
 import { initRedis } from './state/redis'
 import { proxyRoutes } from './routes/proxy'
 import { healthRoutes } from './routes/health'
+import { closeKafka, initKafka } from './events/kafka'
 
 async function start(): Promise<void> {
   const config = await loadConfig()
@@ -19,6 +20,9 @@ async function start(): Promise<void> {
     writePolicy(name, policy)
   }
   initMemory(config)
+  if (config.global?.kafka) {
+    initKafka(config.global.kafka)
+  }
 
   const app = Fastify({
     logger: true,
@@ -44,6 +48,12 @@ async function start(): Promise<void> {
   await app.register(healthRoutes, { config })
 
   const port = parseInt(process.env.PORT ?? '4000', 10)
+  const shutdown = async (): Promise<void> => {
+    await app.close()
+    await closeKafka()
+  }
+  process.once('SIGINT', () => { void shutdown() })
+  process.once('SIGTERM', () => { void shutdown() })
   await app.listen({ port, host: '0.0.0.0' })
 }
 

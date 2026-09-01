@@ -2,6 +2,7 @@ import { ParsedConfig } from '../config/schema'
 import { checkRateLimit } from '../policies/rateLimiter'
 import { checkCircuit, recordCircuitOutcome } from '../policies/circuitBreaker'
 import { executeWithRetry } from '../policies/retry'
+import { publishResilienceEvent } from '../events/kafka'
 
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -47,6 +48,7 @@ export async function handleProxyRequest(
   if (policy.rate_limit) {
     const allowed = checkRateLimit(serviceName, policy.rate_limit, callerIp)
     if (!allowed) {
+      publishResilienceEvent({ type: 'rate_limit.rejected', service: serviceName })
       return {
         statusCode: 429,
         headers: { 'content-type': 'application/json' },
@@ -60,6 +62,7 @@ export async function handleProxyRequest(
   if (policy.circuit_breaker) {
     circuitResult = await checkCircuit(serviceName, policy.circuit_breaker)
     if (!circuitResult.allowed) {
+      publishResilienceEvent({ type: 'circuit.rejected', service: serviceName })
       return {
         statusCode: 503,
         headers: { 'content-type': 'application/json' },
@@ -82,7 +85,13 @@ export async function handleProxyRequest(
     body,
     policy.retry,
     policy.timeoutMs,
-    policy.failureOn
+    policy.failureOn,
+    retry => publishResilienceEvent({
+      type: 'retry.scheduled',
+      service: serviceName,
+      requestId: headers['x-request-id'],
+      details: { ...retry },
+    })
   )
 
   // 7. Record circuit outcome
@@ -90,6 +99,13 @@ export async function handleProxyRequest(
     const failed = outcome.allAttemptsFailed || outcome.timedOut
     await recordCircuitOutcome(serviceName, policy.circuit_breaker, failed, circuitResult.isTestRequest)
   }
+
+  publishResilienceEvent({
+    type: outcome.allAttemptsFailed || outcome.timedOut ? 'request.failed' : 'request.completed',
+    service: serviceName,
+    requestId: headers['x-request-id'],
+    details: { statusCode: outcome.response.status, timedOut: outcome.timedOut },
+  })
 
   // 8. Return response
   const rawResponseHeaders: Record<string, string> = {}

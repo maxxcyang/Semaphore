@@ -12,6 +12,7 @@
     "fastify": "^4.26.2",
     "ioredis": "^5.11.0",
     "js-yaml": "^4.1.0",
+    "kafkajs": "^2.2.4",
     "zod": "^3.22.4"
   },
   "devDependencies": {
